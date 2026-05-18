@@ -1,22 +1,53 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"log"
+	"os"
 
-	tree_sitter "github.com/tree-sitter/go-tree-sitter"
-	tree_sitter_javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
+	"github.com/mohamamd-y-abbass/mearch/internal/scanner"
 )
 
 func main() {
-	code := []byte("const foo = 1 + 2")
+	// Get target directory from CLI arg, default to current directory.
+	root := "."
+	if len(os.Args) > 1 {
+		root = os.Args[1]
+	}
 
-	parser := tree_sitter.NewParser()
-	defer parser.Close()
-	parser.SetLanguage(tree_sitter.NewLanguage(tree_sitter_javascript.Language()))
+	s, err := scanner.NewScanner(root, scanner.ScanOptions{
+		// Test extra ignore dirs
+		ExtraIgnoredDirs: []string{"testdata"},
+		// Test extra extensions
+		ExtraExtensions: []string{".json"},
+		// Limit depth so output stays readable during testing
+		MaxDepth: 5,
+	})
+	if err != nil {
+		log.Fatalf("failed to create scanner: %v", err)
+	}
 
-	tree := parser.Parse(code, nil)
-	defer tree.Close()
+	fmt.Printf("scanning: %s\n\n", s.RootDir())
 
-	root := tree.RootNode()
-	fmt.Println(root.ToSexp())
+	files, err := s.Scan()
+
+	// Handle non-fatal scan errors — print them but don't stop.
+	var scanErrs scanner.ScanErrors
+	if errors.As(err, &scanErrs) {
+		fmt.Println("=== scan warnings ===")
+		for _, e := range scanErrs {
+			fmt.Printf("  skipped: %v\n", e)
+		}
+		fmt.Println()
+	} else if err != nil {
+		// Fatal error — the root walk itself failed.
+		log.Fatalf("scan failed: %v", err)
+	}
+
+	// Print results.
+	fmt.Printf("=== found %d files ===\n", len(files))
+	for _, f := range files {
+		fmt.Println(" ", f)
+	}
 }
