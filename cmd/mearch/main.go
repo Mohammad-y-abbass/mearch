@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
 
+	"github.com/mohamamd-y-abbass/mearch/internal/extractor"
 	"github.com/mohamamd-y-abbass/mearch/internal/parser"
 	"github.com/mohamamd-y-abbass/mearch/internal/scanner"
 )
@@ -18,8 +20,15 @@ func main() {
 		root = os.Args[1]
 	}
 
-	// --- Step 1: Scan ---
-	fmt.Println("=== SCANNER ===")
+	// Optional flag: pass "--json" as second arg to dump full IR as JSON.
+	dumpJSON := len(os.Args) > 2 && os.Args[2] == "--json"
+
+	// =========================================================
+	// STEP 1: SCAN
+	// =========================================================
+	fmt.Println("╔══════════════════════════════╗")
+	fmt.Println("║          SCANNER             ║")
+	fmt.Println("╚══════════════════════════════╝")
 
 	s, err := scanner.NewScanner(root, scanner.ScanOptions{
 		MaxDepth: 10,
@@ -32,10 +41,10 @@ func main() {
 
 	files, err := s.Scan()
 
-	// Non-fatal scan errors — print and continue.
+	// Non-fatal scan errors — log and continue.
 	var scanErrs scanner.ScanErrors
 	if errors.As(err, &scanErrs) {
-		fmt.Println("scan warnings:")
+		fmt.Println("⚠ scan warnings:")
 		for _, e := range scanErrs {
 			fmt.Printf("  skipped: %v\n", e)
 		}
@@ -44,106 +53,133 @@ func main() {
 		log.Fatalf("scan failed: %v", err)
 	}
 
-	fmt.Printf("found %d files\n\n", len(files))
+	fmt.Printf("✓ found %d files\n\n", len(files))
 
-	// --- Step 2: Parse each file ---
-	fmt.Println("=== PARSER ===")
+	// =========================================================
+	// STEP 2: PARSE + EXTRACT IR
+	// =========================================================
+	fmt.Println("╔══════════════════════════════╗")
+	fmt.Println("║       PARSER + EXTRACTOR     ║")
+	fmt.Println("╚══════════════════════════════╝")
 
-	// One parser instance for the whole run.
-	// In production the indexer will create one per worker goroutine.
 	p := parser.NewParser()
 	defer p.Close()
+
+	ext := extractor.NewGoExtractor()
 
 	ctx := context.Background()
 
 	var (
-		parsed  int
-		skipped int
-		errored int
+		totalParsed  int
+		totalSkipped int
+		totalErrored int
 	)
 
 	for _, path := range files {
-		// Skip files the parser doesn't support yet (e.g. .ts, .tsx until
-		// those grammars are wired in).
+		// Skip files with no registered grammar yet.
 		if parser.LanguageForFile(path) == parser.LanguageUnknown {
-			skipped++
+			totalSkipped++
 			continue
 		}
 
+		// --- Parse ---
 		result, err := p.ParseFile(ctx, path)
 		if err != nil {
-			fmt.Printf("  [ERROR]  %s\n    %v\n", path, err)
-			errored++
+			fmt.Printf("✗ [PARSE ERROR] %s\n  %v\n\n", path, err)
+			totalErrored++
+			continue
+		}
+		defer result.Close()
+
+		// Warn about syntax errors but keep going — partial IR is fine.
+		if result.HasErrors() {
+			fmt.Printf("⚠ [SYNTAX ERRORS] %s — extracting partial IR\n", path)
+		}
+
+		// --- Extract IR ---
+		fileIR, err := ext.Extract(result)
+		if err != nil {
+			fmt.Printf("✗ [IR ERROR] %s\n  %v\n\n", path, err)
+			totalErrored++
 			continue
 		}
 
-		// Always free the tree when done.
-		// In the real indexer, the IR extractor will consume the tree
-		// before Close() is called.
-		defer result.Close()
+		totalParsed++
 
-		// Print a summary line per file.
-		status := "OK"
-		if result.HasErrors() {
-			status = "PARSE ERRORS"
-		}
+		// --- Print IR summary ---
+		fmt.Printf("✓ %s\n", path)
+		fmt.Printf("  package   : %s\n", fileIR.Package)
+		fmt.Printf("  imports   : %d\n", len(fileIR.Imports))
+		fmt.Printf("  functions : %d\n", len(fileIR.Functions))
+		fmt.Printf("  symbols   : %d\n", len(fileIR.Symbols))
+		fmt.Printf("  calls     : %d\n", len(fileIR.Calls))
+		fmt.Printf("  edges     : %d\n", len(fileIR.Edges))
 
-		fmt.Printf("  [%-12s] %s\n", status, path)
-		fmt.Printf("    language : %s\n", result.Language)
-		fmt.Printf("    bytes    : %d\n", len(result.Source))
-		fmt.Printf("    root     : %s\n", result.RootNode().Kind())
-
-		// Print the top-level children of the tree — gives a quick feel
-		// for what Tree-sitter sees without dumping the full S-expression.
-		root := result.RootNode()
-		childCount := root.NamedChildCount()
-		fmt.Printf("    children : %d named top-level nodes\n", childCount)
-
-		// Show up to 5 top-level nodes so output stays readable.
-		limit := childCount
-		if limit > 5 {
-			limit = 5
-		}
-		for i := range limit {
-			child := root.NamedChild(uint(i))
-			if child == nil {
-				continue
+		// Imports
+		if len(fileIR.Imports) > 0 {
+			fmt.Println("  ┌─ imports")
+			for _, imp := range fileIR.Imports {
+				alias := ""
+				if imp.Alias != "" {
+					alias = fmt.Sprintf(" (alias: %s)", imp.Alias)
+				}
+				fmt.Printf("  │  %s%s\n", imp.Path, alias)
 			}
-			fmt.Printf("      [%d] %-20s %q\n",
-				i,
-				child.Kind(),
-				truncate(result.NodeContent(child), 60),
-			)
 		}
-		if childCount > 5 {
-			fmt.Printf("      ... and %d more\n", childCount-5)
+
+		// Functions and methods
+		if len(fileIR.Functions) > 0 {
+			fmt.Println("  ┌─ functions")
+			for _, fn := range fileIR.Functions {
+				receiver := ""
+				if fn.Receiver != "" {
+					receiver = fmt.Sprintf(" [receiver: %s]", fn.Receiver)
+				}
+				fmt.Printf("  │  %-40s %s%s\n", fn.Qualified, fn.Visibility, receiver)
+			}
+		}
+
+		// Symbols (structs, interfaces, etc.)
+		if len(fileIR.Symbols) > 0 {
+			fmt.Println("  ┌─ symbols")
+			for _, sym := range fileIR.Symbols {
+				fmt.Printf("  │  %-40s kind=%-10s %s\n", sym.Qualified, sym.Kind, sym.Visibility)
+			}
+		}
+
+		// Calls
+		if len(fileIR.Calls) > 0 {
+			fmt.Println("  ┌─ calls")
+			for _, call := range fileIR.Calls {
+				fmt.Printf("  │  %-40s kind=%s\n", call.Target, call.Kind)
+			}
+		}
+
+		// Edges
+		if len(fileIR.Edges) > 0 {
+			fmt.Println("  ┌─ edges")
+			for _, edge := range fileIR.Edges {
+				fmt.Printf("  │  %-30s -[%-10s]→ %s\n", edge.From, edge.Kind, edge.To)
+			}
+		}
+
+		// Full JSON dump if --json flag passed
+		if dumpJSON {
+			fmt.Println("  ┌─ full IR (JSON)")
+			b, _ := json.MarshalIndent(fileIR, "  ", "  ")
+			fmt.Println(string(b))
 		}
 
 		fmt.Println()
-		parsed++
 	}
 
-	// --- Summary ---
-	fmt.Println("=== SUMMARY ===")
-	fmt.Printf("  parsed  : %d\n", parsed)
-	fmt.Printf("  skipped : %d (unsupported language)\n", skipped)
-	fmt.Printf("  errors  : %d\n", errored)
-}
-
-// truncate shortens a string to maxLen characters for display purposes.
-// Adds "..." suffix when truncated.
-func truncate(s string, maxLen int) string {
-	// Strip newlines so multi-line nodes display on one line.
-	out := ""
-	for _, ch := range s {
-		if ch == '\n' || ch == '\r' || ch == '\t' {
-			out += " "
-		} else {
-			out += string(ch)
-		}
-	}
-	if len(out) <= maxLen {
-		return out
-	}
-	return out[:maxLen] + "..."
+	// =========================================================
+	// SUMMARY
+	// =========================================================
+	fmt.Println("╔══════════════════════════════╗")
+	fmt.Println("║           SUMMARY            ║")
+	fmt.Println("╚══════════════════════════════╝")
+	fmt.Printf("  ✓ extracted : %d files\n", totalParsed)
+	fmt.Printf("  ⊘ skipped   : %d files (unsupported language)\n", totalSkipped)
+	fmt.Printf("  ✗ errors    : %d files\n", totalErrored)
 }
