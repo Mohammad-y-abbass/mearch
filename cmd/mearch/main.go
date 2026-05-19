@@ -2,184 +2,240 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
+	"sort"
 
 	"github.com/mohamamd-y-abbass/mearch/internal/extractor"
+	"github.com/mohamamd-y-abbass/mearch/internal/graph"
+	"github.com/mohamamd-y-abbass/mearch/internal/ir"
 	"github.com/mohamamd-y-abbass/mearch/internal/parser"
 	"github.com/mohamamd-y-abbass/mearch/internal/scanner"
 )
 
 func main() {
-	// Get target directory from CLI arg, default to current directory.
 	root := "."
 	if len(os.Args) > 1 {
 		root = os.Args[1]
 	}
 
-	// Optional flag: pass "--json" as second arg to dump full IR as JSON.
-	dumpJSON := len(os.Args) > 2 && os.Args[2] == "--json"
-
 	// =========================================================
 	// STEP 1: SCAN
 	// =========================================================
-	fmt.Println("╔══════════════════════════════╗")
-	fmt.Println("║          SCANNER             ║")
-	fmt.Println("╚══════════════════════════════╝")
+	printHeader("1. SCANNER")
 
-	s, err := scanner.NewScanner(root, scanner.ScanOptions{
-		MaxDepth: 10,
-	})
+	s, err := scanner.NewScanner(root, scanner.ScanOptions{MaxDepth: 10})
 	if err != nil {
 		log.Fatalf("scanner init failed: %v", err)
 	}
-
-	fmt.Printf("root: %s\n\n", s.RootDir())
+	fmt.Printf("  root: %s\n\n", s.RootDir())
 
 	files, err := s.Scan()
-
-	// Non-fatal scan errors — log and continue.
 	var scanErrs scanner.ScanErrors
 	if errors.As(err, &scanErrs) {
-		fmt.Println("⚠ scan warnings:")
 		for _, e := range scanErrs {
-			fmt.Printf("  skipped: %v\n", e)
+			fmt.Printf("  ⚠ skipped: %v\n", e)
 		}
-		fmt.Println()
 	} else if err != nil {
 		log.Fatalf("scan failed: %v", err)
 	}
-
-	fmt.Printf("✓ found %d files\n\n", len(files))
+	fmt.Printf("  ✓ %d files found\n\n", len(files))
 
 	// =========================================================
 	// STEP 2: PARSE + EXTRACT IR
 	// =========================================================
-	fmt.Println("╔══════════════════════════════╗")
-	fmt.Println("║       PARSER + EXTRACTOR     ║")
-	fmt.Println("╚══════════════════════════════╝")
+	printHeader("2. PARSER + IR EXTRACTOR")
 
 	p := parser.NewParser()
 	defer p.Close()
 
 	ext := extractor.NewGoExtractor()
-
 	ctx := context.Background()
 
 	var (
-		totalParsed  int
+		fileIRs      []*ir.FileIR
 		totalSkipped int
 		totalErrored int
 	)
 
 	for _, path := range files {
-		// Skip files with no registered grammar yet.
 		if parser.LanguageForFile(path) == parser.LanguageUnknown {
 			totalSkipped++
 			continue
 		}
 
-		// --- Parse ---
 		result, err := p.ParseFile(ctx, path)
 		if err != nil {
-			fmt.Printf("✗ [PARSE ERROR] %s\n  %v\n\n", path, err)
+			fmt.Printf("  ✗ [PARSE ERROR] %s: %v\n", path, err)
 			totalErrored++
 			continue
 		}
 		defer result.Close()
 
-		// Warn about syntax errors but keep going — partial IR is fine.
 		if result.HasErrors() {
-			fmt.Printf("⚠ [SYNTAX ERRORS] %s — extracting partial IR\n", path)
+			fmt.Printf("  ⚠ [SYNTAX ERRORS] %s\n", path)
 		}
 
-		// --- Extract IR ---
 		fileIR, err := ext.Extract(result)
 		if err != nil {
-			fmt.Printf("✗ [IR ERROR] %s\n  %v\n\n", path, err)
+			fmt.Printf("  ✗ [IR ERROR] %s: %v\n", path, err)
 			totalErrored++
 			continue
 		}
 
-		totalParsed++
+		fileIRs = append(fileIRs, fileIR)
+		fmt.Printf("  ✓ %-60s pkg=%-15s fn=%-3d sym=%-3d imports=%d\n",
+			shorten(path, 60),
+			fileIR.Package,
+			len(fileIR.Functions),
+			len(fileIR.Symbols),
+			len(fileIR.Imports),
+		)
+	}
 
-		// --- Print IR summary ---
-		fmt.Printf("✓ %s\n", path)
-		fmt.Printf("  package   : %s\n", fileIR.Package)
-		fmt.Printf("  imports   : %d\n", len(fileIR.Imports))
-		fmt.Printf("  functions : %d\n", len(fileIR.Functions))
-		fmt.Printf("  symbols   : %d\n", len(fileIR.Symbols))
-		fmt.Printf("  calls     : %d\n", len(fileIR.Calls))
-		fmt.Printf("  edges     : %d\n", len(fileIR.Edges))
+	fmt.Printf("\n  extracted: %d  skipped: %d  errors: %d\n\n",
+		len(fileIRs), totalSkipped, totalErrored)
 
-		// Imports
-		if len(fileIR.Imports) > 0 {
-			fmt.Println("  ┌─ imports")
-			for _, imp := range fileIR.Imports {
-				alias := ""
-				if imp.Alias != "" {
-					alias = fmt.Sprintf(" (alias: %s)", imp.Alias)
-				}
-				fmt.Printf("  │  %s%s\n", imp.Path, alias)
+	// =========================================================
+	// STEP 3: BUILD GRAPH
+	// =========================================================
+	printHeader("3. GRAPH BUILDER")
+
+	builder := graph.NewBuilder()
+	g := builder.Build(fileIRs)
+	stats := g.Stats()
+
+	fmt.Printf("  ✓ graph built\n\n")
+	fmt.Printf("  total nodes : %d\n", stats.TotalNodes)
+	fmt.Printf("  total edges : %d\n", stats.TotalEdges)
+	fmt.Println()
+	fmt.Println("  nodes by kind:")
+
+	// Print node kinds in a stable sorted order.
+	kinds := make([]string, 0, len(stats.ByKind))
+	for k := range stats.ByKind {
+		kinds = append(kinds, string(k))
+	}
+	sort.Strings(kinds)
+	for _, k := range kinds {
+		fmt.Printf("    %-14s %d\n", k, stats.ByKind[graph.NodeKind(k)])
+	}
+
+	// =========================================================
+	// STEP 4: SPOT CHECKS — traverse the graph
+	// =========================================================
+	printHeader("4. GRAPH TRAVERSAL SPOT CHECKS")
+
+	allNodes := g.AllNodes()
+
+	// --- 4a. Pick the first file node and show its imports ---
+	var fileNode *graph.Node
+	for _, n := range allNodes {
+		if n.Kind == graph.NodeKindFile {
+			fileNode = n
+			break
+		}
+	}
+
+	if fileNode != nil {
+		fmt.Printf("  File node: %s\n", fileNode.ID)
+		imports := g.Neighbors(fileNode.ID, graph.EdgeKindImport)
+		fmt.Printf("  Imports (%d):\n", len(imports))
+		for _, imp := range imports {
+			fmt.Printf("    → %s\n", imp.ID)
+		}
+		fmt.Println()
+	}
+
+	// --- 4b. Pick the first struct node and show its methods ---
+	var structNode *graph.Node
+	for _, n := range allNodes {
+		if n.Kind == graph.NodeKindStruct {
+			structNode = n
+			break
+		}
+	}
+
+	if structNode != nil {
+		fmt.Printf("  Struct node: %s\n", structNode.ID)
+		methods := g.Neighbors(structNode.ID, graph.EdgeKindDefine)
+		fmt.Printf("  Methods (%d):\n", len(methods))
+		for _, m := range methods {
+			fmt.Printf("    → %s\n", m.ID)
+		}
+		fmt.Println()
+	}
+
+	// --- 4c. BFS from first package node, depth 2 ---
+	var pkgNode *graph.Node
+	for _, n := range allNodes {
+		if n.Kind == graph.NodeKindPackage {
+			pkgNode = n
+			break
+		}
+	}
+
+	if pkgNode != nil {
+		fmt.Printf("  BFS from package %q (max depth 2):\n", pkgNode.ID)
+		g.BFS(pkgNode.ID, 2, func(n *graph.Node, depth int) bool {
+			indent := "  "
+			for i := 0; i < depth; i++ {
+				indent += "  "
 			}
-		}
+			fmt.Printf("%s[depth %d] %-12s %s\n", indent, depth, n.Kind, n.ID)
+			return true
+		})
+		fmt.Println()
+	}
 
-		// Functions and methods
-		if len(fileIR.Functions) > 0 {
-			fmt.Println("  ┌─ functions")
-			for _, fn := range fileIR.Functions {
-				receiver := ""
-				if fn.Receiver != "" {
-					receiver = fmt.Sprintf(" [receiver: %s]", fn.Receiver)
-				}
-				fmt.Printf("  │  %-40s %s%s\n", fn.Qualified, fn.Visibility, receiver)
-			}
+	// --- 4d. Reverse lookup — who depends on the first external package? ---
+	var extNode *graph.Node
+	for _, n := range allNodes {
+		if n.Kind == graph.NodeKindExternal {
+			extNode = n
+			break
 		}
+	}
 
-		// Symbols (structs, interfaces, etc.)
-		if len(fileIR.Symbols) > 0 {
-			fmt.Println("  ┌─ symbols")
-			for _, sym := range fileIR.Symbols {
-				fmt.Printf("  │  %-40s kind=%-10s %s\n", sym.Qualified, sym.Kind, sym.Visibility)
-			}
+	if extNode != nil {
+		fmt.Printf("  Reverse lookup — who imports %q?\n", extNode.ID)
+		dependents := g.Dependents(extNode.ID, graph.EdgeKindImport)
+		for _, d := range dependents {
+			fmt.Printf("    ← %s (%s)\n", d.ID, d.Kind)
 		}
-
-		// Calls
-		if len(fileIR.Calls) > 0 {
-			fmt.Println("  ┌─ calls")
-			for _, call := range fileIR.Calls {
-				fmt.Printf("  │  %-40s kind=%s\n", call.Target, call.Kind)
-			}
-		}
-
-		// Edges
-		if len(fileIR.Edges) > 0 {
-			fmt.Println("  ┌─ edges")
-			for _, edge := range fileIR.Edges {
-				fmt.Printf("  │  %-30s -[%-10s]→ %s\n", edge.From, edge.Kind, edge.To)
-			}
-		}
-
-		// Full JSON dump if --json flag passed
-		if dumpJSON {
-			fmt.Println("  ┌─ full IR (JSON)")
-			b, _ := json.MarshalIndent(fileIR, "  ", "  ")
-			fmt.Println(string(b))
-		}
-
 		fmt.Println()
 	}
 
 	// =========================================================
 	// SUMMARY
 	// =========================================================
-	fmt.Println("╔══════════════════════════════╗")
-	fmt.Println("║           SUMMARY            ║")
-	fmt.Println("╚══════════════════════════════╝")
-	fmt.Printf("  ✓ extracted : %d files\n", totalParsed)
-	fmt.Printf("  ⊘ skipped   : %d files (unsupported language)\n", totalSkipped)
-	fmt.Printf("  ✗ errors    : %d files\n", totalErrored)
+	printHeader("SUMMARY")
+	fmt.Printf("  files scanned   : %d\n", len(files))
+	fmt.Printf("  IRs extracted   : %d\n", len(fileIRs))
+	fmt.Printf("  graph nodes     : %d\n", stats.TotalNodes)
+	fmt.Printf("  graph edges     : %d\n", stats.TotalEdges)
+	fmt.Printf("  skipped         : %d (unsupported language)\n", totalSkipped)
+	fmt.Printf("  errors          : %d\n", totalErrored)
+}
+
+// =========================================================
+// Helpers
+// =========================================================
+
+func printHeader(title string) {
+	line := "═══════════════════════════════════════"
+	fmt.Printf("╔%s╗\n", line)
+	fmt.Printf("║  %-36s║\n", title)
+	fmt.Printf("╚%s╝\n", line)
+}
+
+// shorten truncates a string from the left if it exceeds maxLen,
+// preserving the rightmost characters (the filename part).
+func shorten(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return "..." + s[len(s)-(maxLen-3):]
 }
