@@ -1,0 +1,50 @@
+# Binaries
+/mearch
+/mearch.exe
+mearch.exe
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go build & test artifacts
+*.test
+*.out
+coverage.out
+coverage.html
+*.prof
+vendor/
+
+# IDE & editor
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Python (trajectory_extractor.py)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+ENV/
+
+# Benchmark outputs & cloned repos
+benchmark_results.json
+custom_tasks.json
+benchmark_data/repos/
+
+# Local scratch / experiments (optional local copies)
+scratch_run.local.go
