@@ -47,13 +47,11 @@ Scanner → Parser (Tree-sitter) → Extractor (per-language IR)
 | `internal/retrieval` | Index-time scoring + query-time pipeline |
 | `internal/mcp`     | MCP server, tools, auto-index |
 | `cmd/mearch`       | Server entrypoint |
-| `cmd/benchmark`    | Benchmark harness vs. agent trajectories |
 
 ## Requirements
 
 - **Go 1.25+** (see `go.mod`)
 - An MCP client (e.g. Cursor) for normal use
-- **Optional (benchmarks):** Python 3 with `datasets`, `tiktoken`, `gitpython` for `trajectory_extractor.py`
 
 ## Quick start
 
@@ -179,7 +177,6 @@ The process expects an MCP client on stdio; running alone will appear idle until
 ```
 cmd/
   mearch/          # MCP server main
-  benchmark/       # Retrieval benchmark CLI
 internal/
   mcp/             # MCP server & tools
   scanner/         # File discovery
@@ -188,32 +185,7 @@ internal/
   ir/              # Intermediate representation
   graph/           # Code graph
   retrieval/       # BM25 + graph retrieval
-benchmark_data/    # Sample tasks.json for benchmarks
-trajectory_extractor.py
 ```
-
-## Benchmarking
-
-Mearch can be compared against real agent “exploration” cost using SWE-bench-style trajectories.
-
-### 1. Extract tasks (Python)
-
-```bash
-pip install datasets tiktoken gitpython
-python trajectory_extractor.py --output-dir ./benchmark_data --max-tasks 20
-```
-
-This writes `benchmark_data/tasks.json` and may clone repos under `benchmark_data/repos/` (gitignored).
-
-### 2. Run benchmark (Go)
-
-```bash
-go run ./cmd/benchmark --tasks ./benchmark_data/tasks.json
-go run ./cmd/benchmark --tasks ./benchmark_data/tasks.json --debug
-go run ./cmd/benchmark --tasks ./benchmark_data/tasks.json --output benchmark_results.json
-```
-
-Results compare Mearch retrieval token usage and relevance against baseline agent tool-call overhead from the trajectories.
 
 ## How retrieval works (summary)
 
