@@ -38,3 +38,15 @@ func (se ScanErrors) Error() string {
 	}
 	return se[0].Error() + " (and " + itoa(len(se)-1) + " more scan errors)"
 }
+
+// --- Error types ---
+
+// NotADirectoryError is returned when the provided root path exists but
+// is not a directory (e.g. a file was passed as the root).
+type NotADirectoryError struct {
+	Path string
+}
+
+func (e *NotADirectoryError) Error() string {
+	return "mearch/scanner: root path is not a directory: " + e.Path
+}

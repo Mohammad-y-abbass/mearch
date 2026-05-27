@@ -9,7 +9,8 @@
 // IR extractor's job. The parser's only output is a ParseResult containing
 // the raw source bytes and the Tree-sitter syntax tree.
 //
-// This package currently supports Go only.
+// Supported languages: Go, Python, JavaScript, TypeScript, TSX, Rust, C,
+// C++, Java, Bash, JSON, HTML, CSS.
 // Adding a new language requires three steps:
 //  1. Add a Language constant below
 //  2. Add the grammar import and a case in treeSitterLanguage()
@@ -30,118 +31,19 @@ import (
 	"path/filepath"
 
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_bash "github.com/tree-sitter/tree-sitter-bash/bindings/go"
+	tree_sitter_c "github.com/tree-sitter/tree-sitter-c/bindings/go"
+	tree_sitter_cpp "github.com/tree-sitter/tree-sitter-cpp/bindings/go"
+	tree_sitter_css "github.com/tree-sitter/tree-sitter-css/bindings/go"
 	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
+	tree_sitter_html "github.com/tree-sitter/tree-sitter-html/bindings/go"
+	tree_sitter_java "github.com/tree-sitter/tree-sitter-java/bindings/go"
+	tree_sitter_javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
+	tree_sitter_json "github.com/tree-sitter/tree-sitter-json/bindings/go"
+	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
+	tree_sitter_rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
+	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
-
-// Language represents a supported source language.
-//
-// Using a typed constant (not a raw string) means:
-//   - typos are caught at compile time
-//   - switch statements can be exhaustive
-//   - the zero value (LanguageUnknown) is safe and meaningful
-type Language uint8
-
-const (
-	// LanguageUnknown is the zero value — returned when the file extension
-	// has no registered grammar. Treat as "do not parse".
-	LanguageUnknown Language = iota
-
-	// LanguageGo represents Go source files (.go).
-	LanguageGo
-
-	// Future languages — uncomment as grammars are integrated.
-	// Each requires a grammar import and a case in treeSitterLanguage().
-	// LanguageTypeScript
-	// LanguageJavaScript
-	// LanguageTSX
-	// LanguageJSX
-	// LanguageRust
-)
-
-// ParseResult holds the output of a single parse operation.
-//
-// Ownership: ParseResult owns the Tree. Call result.Close() when done
-// to release Tree-sitter C memory. The canonical pattern is:
-//
-//	result, err := p.ParseFile(ctx, path)
-//	if err != nil { ... }
-//	defer result.Close()
-//
-// Do NOT share a ParseResult across goroutines — the underlying Tree-sitter
-// tree is not goroutine-safe.
-type ParseResult struct {
-	// Path is the absolute path of the parsed file.
-	// Set even when parsing from bytes (ParseBytes) — used for error messages
-	// and IR attribution.
-	Path string
-
-	// Language is the detected language of this file.
-	Language Language
-
-	// Source is the raw file content as parsed.
-	//
-	// IMPORTANT: Tree-sitter node positions (StartByte, EndByte) are byte
-	// offsets into this exact slice. Do not modify Source after parsing —
-	// byte offsets will become invalid. The IR extractor reads both the tree
-	// and Source together.
-	Source []byte
-
-	// Tree is the Tree-sitter syntax tree produced by parsing Source.
-	//
-	// Tree-sitter is an error-recovering parser — it always produces a tree,
-	// even for syntactically broken files. Check HasErrors() to know whether
-	// the file parsed cleanly. Partial trees are still useful for indexing.
-	//
-	// Call Close() to free C memory when done.
-	Tree *tree_sitter.Tree
-}
-
-
-// RootNode returns the root node of the syntax tree.
-//
-// This is the entry point for all IR extraction — the extractor receives
-// the root node and Source together and walks from here.
-//
-// Returns nil if the ParseResult or Tree is nil (e.g. after Close()).
-func (r *ParseResult) RootNode() *tree_sitter.Node {
-	if r == nil || r.Tree == nil {
-		return nil
-	}
-	return r.Tree.RootNode()
-}
-
-// HasErrors reports whether the syntax tree contains any parse errors.
-//
-// Tree-sitter recovers from syntax errors by inserting ERROR nodes into
-// the tree rather than failing. A file with HasErrors() == true can still
-// be partially indexed — the IR extractor skips nodes it cannot interpret.
-//
-// Prefer partial indexing over refusing to index. A broken file is still
-// better indexed than not indexed at all.
-func (r *ParseResult) HasErrors() bool {
-	if r == nil || r.Tree == nil {
-		return false
-	}
-	return r.Tree.RootNode().HasError()
-}
-
-// NodeContent extracts the source text for a given node using its byte offsets.
-//
-// Used heavily in the IR extractor — every symbol name, import path, and
-// function signature is pulled out this way:
-//
-//	name := result.NodeContent(node)
-func (r *ParseResult) NodeContent(node *tree_sitter.Node) string {
-	if node == nil {
-		return ""
-	}
-	start := node.StartByte()
-	end := node.EndByte()
-	if end > uint(len(r.Source)) {
-		return ""
-	}
-	return string(r.Source[start:end])
-}
 
 // Parser parses source files into Tree-sitter syntax trees.
 //
@@ -284,35 +186,32 @@ func (p *Parser) ParseBytes(ctx context.Context, path string, lang Language, src
 func treeSitterLanguage(lang Language) (*tree_sitter.Language, error) {
 	switch lang {
 	case LanguageGo:
-		// tree_sitter.NewLanguage wraps the raw C language pointer returned
-		// by the grammar binding into the Go-safe Language type.
 		return tree_sitter.NewLanguage(tree_sitter_go.Language()), nil
-
-	// Future grammars:
-	// case LanguageTypeScript:
-	// 	return tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript()), nil
-	// case LanguageTSX:
-	// 	return tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTSX()), nil
-	// case LanguageJavaScript:
-	// 	return tree_sitter.NewLanguage(tree_sitter_javascript.Language()), nil
-
+	case LanguagePython:
+		return tree_sitter.NewLanguage(tree_sitter_python.Language()), nil
+	case LanguageJavaScript:
+		return tree_sitter.NewLanguage(tree_sitter_javascript.Language()), nil
+	case LanguageTypeScript:
+		return tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript()), nil
+	case LanguageTSX:
+		return tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTSX()), nil
+	case LanguageRust:
+		return tree_sitter.NewLanguage(tree_sitter_rust.Language()), nil
+	case LanguageC:
+		return tree_sitter.NewLanguage(tree_sitter_c.Language()), nil
+	case LanguageCPP:
+		return tree_sitter.NewLanguage(tree_sitter_cpp.Language()), nil
+	case LanguageJava:
+		return tree_sitter.NewLanguage(tree_sitter_java.Language()), nil
+	case LanguageBash:
+		return tree_sitter.NewLanguage(tree_sitter_bash.Language()), nil
+	case LanguageJSON:
+		return tree_sitter.NewLanguage(tree_sitter_json.Language()), nil
+	case LanguageHTML:
+		return tree_sitter.NewLanguage(tree_sitter_html.Language()), nil
+	case LanguageCSS:
+		return tree_sitter.NewLanguage(tree_sitter_css.Language()), nil
 	default:
 		return nil, fmt.Errorf("parser: no tree-sitter grammar registered for %q", lang)
 	}
-}
-
-// --- Error types ---
-
-// ErrUnsupportedLanguage is returned when a file's extension has no
-// corresponding Tree-sitter grammar registered in this package.
-type ErrUnsupportedLanguage struct {
-	Path string
-	Ext  string
-}
-
-func (e *ErrUnsupportedLanguage) Error() string {
-	if e.Ext != "" {
-		return fmt.Sprintf("parser: unsupported language (ext=%q, path=%s)", e.Ext, e.Path)
-	}
-	return fmt.Sprintf("parser: unsupported language (path=%s)", e.Path)
 }

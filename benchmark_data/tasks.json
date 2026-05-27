@@ -1,0 +1,237 @@
+[
+  {
+    "instance_id": "custom__000",
+    "repo": "Mohammad-y-abbass/mearch",
+    "base_commit": "f088b12124c4d6a2504491f2f8f55e72cd12a088",
+    "problem_statement": "scanner ignore rules",
+    "repo_path": ".",
+    "tool_calls": [],
+    "explore_tokens": 0,
+    "explore_calls": 0,
+    "understand_tokens": 0,
+    "understand_calls": 0,
+    "edited_files": [
+      "internal/scanner/scanner.go"
+    ],
+    "edited_symbols": [
+      "ShouldIgnore",
+      "ignoredDirs",
+      "Scanner"
+    ],
+    "total_overhead_tokens": 0,
+    "total_overhead_calls": 0,
+    "patch": ""
+  },
+  {
+    "instance_id": "custom__001",
+    "repo": "Mohammad-y-abbass/mearch",
+    "base_commit": "f088b12124c4d6a2504491f2f8f55e72cd12a088",
+    "problem_statement": "parser tree-sitter language grammar",
+    "repo_path": ".",
+    "tool_calls": [],
+    "explore_tokens": 0,
+    "explore_calls": 0,
+    "understand_tokens": 0,
+    "understand_calls": 0,
+    "edited_files": [
+      "internal/parser/parser.go"
+    ],
+    "edited_symbols": [
+      "Parser",
+      "ParseFile",
+      "ParseBytes",
+      "treeSitterLanguage"
+    ],
+    "total_overhead_tokens": 0,
+    "total_overhead_calls": 0,
+    "patch": ""
+  },
+  {
+    "instance_id": "custom__002",
+    "repo": "Mohammad-y-abbass/mearch",
+    "base_commit": "f088b12124c4d6a2504491f2f8f55e72cd12a088",
+    "problem_statement": "IR extraction functions and methods",
+    "repo_path": ".",
+    "tool_calls": [],
+    "explore_tokens": 0,
+    "explore_calls": 0,
+    "understand_tokens": 0,
+    "understand_calls": 0,
+    "edited_files": [
+      "internal/extractor/extractor.go"
+    ],
+    "edited_symbols": [
+      "GoExtractor",
+      "Extract",
+      "extractFunctions",
+      "extractImports"
+    ],
+    "total_overhead_tokens": 0,
+    "total_overhead_calls": 0,
+    "patch": ""
+  },
+  {
+    "instance_id": "custom__003",
+    "repo": "Mohammad-y-abbass/mearch",
+    "base_commit": "f088b12124c4d6a2504491f2f8f55e72cd12a088",
+    "problem_statement": "graph nodes edges and adjacency",
+    "repo_path": ".",
+    "tool_calls": [],
+    "explore_tokens": 0,
+    "explore_calls": 0,
+    "understand_tokens": 0,
+    "understand_calls": 0,
+    "edited_files": [
+      "internal/graph/graph.go"
+    ],
+    "edited_symbols": [
+      "Graph",
+      "Node",
+      "Edge",
+      "AddNode",
+      "AddEdge"
+    ],
+    "total_overhead_tokens": 0,
+    "total_overhead_calls": 0,
+    "patch": ""
+  },
+  {
+    "instance_id": "custom__004",
+    "repo": "Mohammad-y-abbass/mearch",
+    "base_commit": "f088b12124c4d6a2504491f2f8f55e72cd12a088",
+    "problem_statement": "BM25 index token scoring",
+    "repo_path": ".",
+    "tool_calls": [],
+    "explore_tokens": 0,
+    "explore_calls": 0,
+    "understand_tokens": 0,
+    "understand_calls": 0,
+    "edited_files": [
+      "internal/retrieval/bm25.go"
+    ],
+    "edited_symbols": [
+      "BM25Index",
+      "BuildBM25Index",
+      "Search",
+      "Score"
+    ],
+    "total_overhead_tokens": 0,
+    "total_overhead_calls": 0,
+    "patch": ""
+  },
+  {
+    "instance_id": "custom__005",
+    "repo": "Mohammad-y-abbass/mearch",
+    "base_commit": "f088b12124c4d6a2504491f2f8f55e72cd12a088",
+    "problem_statement": "query expansion synonyms co-occurrence",
+    "repo_path": ".",
+    "tool_calls": [],
+    "explore_tokens": 0,
+    "explore_calls": 0,
+    "understand_tokens": 0,
+    "understand_calls": 0,
+    "edited_files": [
+      "internal/retrieval/expander.go"
+    ],
+    "edited_symbols": [
+      "Expander",
+      "Expand",
+      "BuildCooccurrence"
+    ],
+    "total_overhead_tokens": 0,
+    "total_overhead_calls": 0,
+    "patch": ""
+  },
+  {
+    "instance_id": "custom__006",
+    "repo": "Mohammad-y-abbass/mearch",
+    "base_commit": "f088b12124c4d6a2504491f2f8f55e72cd12a088",
+    "problem_statement": "seed detection strategies",
+    "repo_path": ".",
+    "tool_calls": [],
+    "explore_tokens": 0,
+    "explore_calls": 0,
+    "understand_tokens": 0,
+    "understand_calls": 0,
+    "edited_files": [
+      "internal/retrieval/seeds.go"
+    ],
+    "edited_symbols": [
+      "SeedDetector",
+      "Detect",
+      "Seed"
+    ],
+    "total_overhead_tokens": 0,
+    "total_overhead_calls": 0,
+    "patch": ""
+  },
+  {
+    "instance_id": "custom__007",
+    "repo": "Mohammad-y-abbass/mearch",
+    "base_commit": "f088b12124c4d6a2504491f2f8f55e72cd12a088",
+    "problem_statement": "graph traversal BFS weighted edges",
+    "repo_path": ".",
+    "tool_calls": [],
+    "explore_tokens": 0,
+    "explore_calls": 0,
+    "understand_tokens": 0,
+    "understand_calls": 0,
+    "edited_files": [
+      "internal/retrieval/traversal.go"
+    ],
+    "edited_symbols": [
+      "Traverser",
+      "Traverse",
+      "Candidate"
+    ],
+    "total_overhead_tokens": 0,
+    "total_overhead_calls": 0,
+    "patch": ""
+  },
+  {
+    "instance_id": "custom__008",
+    "repo": "Mohammad-y-abbass/mearch",
+    "base_commit": "f088b12124c4d6a2504491f2f8f55e72cd12a088",
+    "problem_statement": "PageRank centrality scoring",
+    "repo_path": ".",
+    "tool_calls": [],
+    "explore_tokens": 0,
+    "explore_calls": 0,
+    "understand_tokens": 0,
+    "understand_calls": 0,
+    "edited_files": [
+      "internal/retrieval/scorer.go"
+    ],
+    "edited_symbols": [
+      "GraphScorer",
+      "GraphScores",
+      "computePageRank"
+    ],
+    "total_overhead_tokens": 0,
+    "total_overhead_calls": 0,
+    "patch": ""
+  },
+  {
+    "instance_id": "custom__009",
+    "repo": "Mohammad-y-abbass/mearch",
+    "base_commit": "f088b12124c4d6a2504491f2f8f55e72cd12a088",
+    "problem_statement": "token budget compression tiered",
+    "repo_path": ".",
+    "tool_calls": [],
+    "explore_tokens": 0,
+    "explore_calls": 0,
+    "understand_tokens": 0,
+    "understand_calls": 0,
+    "edited_files": [
+      "internal/retrieval/compression.go"
+    ],
+    "edited_symbols": [
+      "Compressor",
+      "Compress",
+      "ContextResult"
+    ],
+    "total_overhead_tokens": 0,
+    "total_overhead_calls": 0,
+    "patch": ""
+  }
+]

@@ -1,0 +1,62 @@
+[
+  {
+    "problem_statement": "scanner ignore rules",
+    "edited_files": ["internal/scanner/scanner.go"],
+    "edited_symbols": ["ShouldIgnore", "ignoredDirs", "Scanner"],
+    "mearch_query": "scanner ignore rules"
+  },
+  {
+    "problem_statement": "parser tree-sitter language grammar",
+    "edited_files": ["internal/parser/parser.go"],
+    "edited_symbols": ["Parser", "ParseFile", "ParseBytes", "treeSitterLanguage"],
+    "mearch_query": "parser tree-sitter language grammar"
+  },
+  {
+    "problem_statement": "IR extraction functions and methods",
+    "edited_files": ["internal/extractor/extractor.go"],
+    "edited_symbols": ["GoExtractor", "Extract", "extractFunctions", "extractImports"],
+    "mearch_query": "IR extraction functions and methods"
+  },
+  {
+    "problem_statement": "graph nodes edges and adjacency",
+    "edited_files": ["internal/graph/graph.go"],
+    "edited_symbols": ["Graph", "Node", "Edge", "AddNode", "AddEdge"],
+    "mearch_query": "graph nodes edges and adjacency"
+  },
+  {
+    "problem_statement": "BM25 index token scoring",
+    "edited_files": ["internal/retrieval/bm25.go"],
+    "edited_symbols": ["BM25Index", "BuildBM25Index", "Search", "Score"],
+    "mearch_query": "BM25 index token scoring"
+  },
+  {
+    "problem_statement": "query expansion synonyms co-occurrence",
+    "edited_files": ["internal/retrieval/expander.go"],
+    "edited_symbols": ["Expander", "Expand", "BuildCooccurrence"],
+    "mearch_query": "query expansion synonyms co-occurrence"
+  },
+  {
+    "problem_statement": "seed detection strategies multi-strategy",
+    "edited_files": ["internal/retrieval/seeds.go"],
+    "edited_symbols": ["SeedDetector", "Detect", "Seed"],
+    "mearch_query": "seed detection strategies"
+  },
+  {
+    "problem_statement": "graph traversal bidirectional BFS weighted",
+    "edited_files": ["internal/retrieval/traversal.go"],
+    "edited_symbols": ["Traverser", "Traverse", "Candidate"],
+    "mearch_query": "graph traversal BFS weighted edges"
+  },
+  {
+    "problem_statement": "PageRank centrality scoring graph signals",
+    "edited_files": ["internal/retrieval/scorer.go"],
+    "edited_symbols": ["GraphScorer", "GraphScores", "computePageRank"],
+    "mearch_query": "PageRank centrality scoring"
+  },
+  {
+    "problem_statement": "token budget compression tiered file collapse",
+    "edited_files": ["internal/retrieval/compression.go"],
+    "edited_symbols": ["Compressor", "Compress", "ContextResult"],
+    "mearch_query": "token budget compression tiered"
+  }
+]

@@ -28,7 +28,6 @@ func visibility(name string) string {
 		if unicode.IsUpper(r) {
 			return "exported"
 		}
-		return "unexported"
 	}
 	return "unexported"
 }

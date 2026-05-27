@@ -12,40 +12,11 @@ package scanner
 
 import (
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
 )
-
-// ScanOptions configures scanner behaviour.
-//
-// The zero value is safe to use and applies sensible defaults.
-// This struct is intentionally kept flat — avoid nesting options
-// inside sub-structs until there is a clear need.
-type ScanOptions struct {
-	// ExtraIgnoredDirs extends the default ignoredDirs set.
-	// Useful for project-specific directories like "generated/" or ".yarn/".
-	// Values are matched against directory base names, not full paths.
-	ExtraIgnoredDirs []string
-
-	// ExtraExtensions extends the default supportedExtensions set.
-	// Include the leading dot: ".vue", not "vue".
-	ExtraExtensions []string
-
-	// MaxDepth limits traversal depth. 0 means unlimited.
-	// Useful for shallow scans during testing or initial indexing previews.
-	// Depth is counted from RootDir (depth 1 = direct children of root).
-	MaxDepth int
-
-	// FollowSymlinks controls whether symbolic links to directories are
-	// traversed. Disabled by default because symlink cycles can cause
-	// infinite walks and are common in monorepo workspace setups.
-	//
-	// TODO: When enabled, implement cycle detection via inode tracking
-	// before shipping this to production. Symlink loops will hang the
-	// indexer indefinitely without it.
-	FollowSymlinks bool
-}
 
 // Scanner discovers source files within a directory tree.
 //
@@ -99,18 +70,18 @@ func NewScanner(rootDir string, opts ScanOptions) (*Scanner, error) {
 	// We copy the package-level map rather than mutating it — the package-
 	// level map is shared across all Scanner instances.
 	effective_ignored := make(map[string]bool, len(ignoredDirs)+len(opts.ExtraIgnoredDirs))
-	for k, v := range ignoredDirs {
-		effective_ignored[k] = v
-	}
+
+	maps.Copy(effective_ignored, ignoredDirs)
+
 	for _, d := range opts.ExtraIgnoredDirs {
 		effective_ignored[d] = true
 	}
 
 	// Same merge pattern for extensions.
 	effectiveExts := make(map[string]bool, len(supportedExtensions)+len(opts.ExtraExtensions))
-	for k, v := range supportedExtensions {
-		effectiveExts[k] = v
-	}
+
+	maps.Copy(effectiveExts, supportedExtensions)
+
 	for _, ext := range opts.ExtraExtensions {
 		// Normalise: ensure the leading dot is present so callers don't
 		// have to remember to include it.
@@ -262,17 +233,3 @@ func (s *Scanner) IsSupported(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return ext != "" && s.extensions[ext]
 }
-
-// --- Error types ---
-
-// NotADirectoryError is returned when the provided root path exists but
-// is not a directory (e.g. a file was passed as the root).
-type NotADirectoryError struct {
-	Path string
-}
-
-func (e *NotADirectoryError) Error() string {
-	return "mearch/scanner: root path is not a directory: " + e.Path
-}
-
-

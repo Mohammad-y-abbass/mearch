@@ -1,30 +1,35 @@
 package scanner
 
-// supportedExtensions contains file extensions Mearch can parse.
+// supportedExtensions contains file extensions Mearch can index.
 //
 // Extensions are stored with the leading dot (e.g. ".go") to match
-// filepath.Ext output directly — no string manipulation needed at
-// call time.
+// filepath.Ext output directly, so no string manipulation is needed at call time.
 //
-// Add new languages here as Tree-sitter grammars are integrated.
-// Do NOT add extensions without a corresponding parser implementation —
-// the scanner and parser layers must stay in sync.
+// Add new languages here after both parser and extractor support exist. The
+// parser may understand more grammars than the extractor indexes; the scanner
+// should only surface files that can become graph IR.
 var supportedExtensions = map[string]bool{
-	// Phase 1: initial language support
+	// Go
 	".go":  true,
 	".mod": true,
 	".sum": true,
 
-	// planned language support (uncomment as parsers land)
-	// ".c":      true,
-	// ".cpp":    true,
-	// ".js":     true,
-	// ".ts":     true,
-	// ".jsx":    true,
-	// ".tsx":    true,
-	// ".rs":     true,
-	// ".py":     true,
-	// ".java":   true,
-	// ".kt":     true,
-	// ".swift":  true,
+	// Python
+	".py": true,
+
+	// JavaScript / JSX
+	".js":  true,
+	".jsx": true,
+	".mjs": true,
+	".cjs": true,
+
+	// TypeScript / TSX
+	".ts":  true,
+	".tsx": true,
+
+	// Rust
+	".rs": true,
+
+	// Java
+	".java": true,
 }
