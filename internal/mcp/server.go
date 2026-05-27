@@ -11,7 +11,7 @@ package mcp
 //
 // Tools exposed:
 //
-//	index_project    — scan and index a project directory
+//	index_project    — scan and index a project directory (also runs on IDE connect)
 //	query_context    — retrieve relevant context for a natural language query
 //	find_symbol      — find a specific symbol by name
 //	find_callers     — find all callers of a symbol
@@ -31,9 +31,9 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -48,10 +48,11 @@ import (
 )
 
 // mearchServer holds the server state.
-// The index is built lazily on the first index_project call and
-// rebuilt whenever index_project is called again with a new path.
+// The index is built automatically when a client connects (IDE open) and
+// can be rebuilt via index_project or when workspace roots change.
 type mearchServer struct {
 	mu      sync.RWMutex
+	indexMu sync.Mutex // serializes auto-index and manual index_project
 	engine  *retrieval.Engine
 	g       *graph.Graph
 	rootDir string
@@ -65,13 +66,22 @@ func New() *mearchServer {
 	return newMearchServer()
 }
 
-// run creates the MCP server, registers all tools, and starts serving on stdio.
+// Run creates the MCP server, registers all tools, and starts serving on stdio.
 func (s *mearchServer) Run() error {
+	fmt.Fprintln(os.Stderr, "MCP SERVER STARTING...")
+
 	// Create MCP server.
 	mcpServer := sdk.NewServer(&sdk.Implementation{
 		Name:    "mearch",
 		Version: "0.1.0",
-	}, nil)
+	}, &sdk.ServerOptions{
+		InitializedHandler: func(ctx context.Context, req *sdk.InitializedRequest) {
+			s.autoIndexOnConnect(ctx, req.Session)
+		},
+		RootsListChangedHandler: func(ctx context.Context, req *sdk.RootsListChangedRequest) {
+			s.autoIndexOnConnect(ctx, req.Session)
+		},
+	})
 
 	// Register tools.
 	s.registerIndexProject(mcpServer)
@@ -107,14 +117,17 @@ func (s *mearchServer) registerIndexProject(srv *sdk.Server) {
 		Name: "index_project",
 		Description: `Index a project directory for code intelligence retrieval.
 
-Must be called before any other Mearch tools. Scans the project,
-parses all source files, builds a semantic graph, and prepares the
-retrieval index. Re-call to re-index after significant code changes.
+The graph is built automatically when the IDE connects. Call this to
+index a different path or to re-index after significant code changes.
+Scans the project, parses source files, builds a semantic graph, and
+prepares the retrieval index.
 
 Returns a summary of what was indexed including file count, graph size,
 and any files that could not be parsed.`,
 	}, func(ctx context.Context, req *sdk.CallToolRequest, args indexProjectArgs) (*sdk.CallToolResult, any, error) {
-		result, err := s.indexProject(ctx, args)
+		s.indexMu.Lock()
+		defer s.indexMu.Unlock()
+		result, err := s.indexProjectLocked(ctx, args)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
@@ -122,7 +135,7 @@ and any files that could not be parsed.`,
 	})
 }
 
-func (s *mearchServer) indexProject(ctx context.Context, args indexProjectArgs) (string, error) {
+func (s *mearchServer) indexProjectLocked(ctx context.Context, args indexProjectArgs) (string, error) {
 	if args.Path == "" {
 		return "", errors.New("path is required")
 	}
@@ -717,47 +730,6 @@ func (s *mearchServer) graphStats() (string, error) {
 	}
 
 	return sb.String(), nil
-}
-
-// =========================================================
-// Helpers
-// =========================================================
-
-// textResult wraps a string as an MCP text content result.
-func textResult(text string) *sdk.CallToolResult {
-	return &sdk.CallToolResult{
-		Content: []sdk.Content{
-			&sdk.TextContent{Text: text},
-		},
-	}
-}
-
-// errorResult wraps an error as an MCP error result.
-func errorResult(err error) *sdk.CallToolResult {
-	return &sdk.CallToolResult{
-		IsError: true,
-		Content: []sdk.Content{
-			&sdk.TextContent{Text: "error: " + err.Error()},
-		},
-	}
-}
-
-// jsonResult serializes a value as JSON and wraps it as an MCP text result.
-// Used when structured data is more useful than formatted text.
-func jsonResult(v any) *sdk.CallToolResult {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return errorResult(fmt.Errorf("failed to serialize result: %w", err))
-	}
-	return textResult(string(b))
-}
-
-// min returns the smaller of two integers.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // keep jsonResult available for future tools
