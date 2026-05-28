@@ -402,14 +402,6 @@ Everything else — graph builder, retrieval engine, MCP server, benchmarks — 
 
 ---
 
-## Future Goals
-
-The following features are planned for future releases, in priority order:
-
-#### File Watcher
-
-Use `fsnotify` to watch for filesystem changes and update the graph incrementally as files are edited. The graph stays live without manual re-indexing.
-
 ## Contributing
 
 ### Code style
