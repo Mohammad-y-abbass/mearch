@@ -1,226 +1,452 @@
 # Mearch
 
-**Mearch** is a code-intelligence engine for AI coding agents. It indexes a project into a semantic graph, then answers natural-language questions with ranked symbols, files, and relationships—within a token budget—so agents spend less time exploring large repositories.
+> **Graph-native code intelligence for AI coding agents.**
 
-It ships as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server over stdio, so tools like **Cursor**, **Claude Desktop**, and other MCP clients can call it directly.
+Mearch is a local-first code intelligence engine that transforms your codebase from raw text into a structured semantic graph, then exposes intelligent retrieval APIs that give AI agents exactly the context they need.
 
-## Features
+---
 
-- **Project scanning** — Walks the workspace while skipping common noise (`node_modules`, `.git`, `vendor`, build outputs, etc.).
-- **Tree-sitter parsing** — Syntax-aware parsing for multiple languages.
-- **IR extraction** — Pulls imports, functions, types, symbols, and call sites into a unified intermediate representation.
-- **Semantic code graph** — Directed graph of packages, files, symbols, and edges (imports, calls, containment, etc.).
-- **Hybrid retrieval** — BM25 + graph signals (PageRank, betweenness, caller counts) + co-occurrence expansion + graph traversal, compressed to a configurable token budget (default **4000** tokens).
-- **MCP tools** — `index_project`, `query_context`, `find_symbol`, `find_callers`, `trace_deps`, `graph_stats`.
-- **Auto-index on connect** — When the IDE connects, Mearch indexes the workspace root from MCP roots (or `MEARCH_PROJECT_PATH`).
+## The Problem
 
-## Supported languages
+Modern AI coding agents are powerful but wasteful. Without structural understanding of a codebase, they resort to:
 
-| Language   | Extensions (examples)              | Indexed (IR + graph) |
-|-----------|-------------------------------------|----------------------|
-| Go        | `.go`                               | Yes                  |
-| Python    | `.py`                               | Yes                  |
-| JavaScript| `.js`, `.jsx`, `.mjs`, `.cjs`       | Yes                  |
-| TypeScript| `.ts`                               | Yes                  |
-| TSX       | `.tsx`                              | Yes                  |
-| Rust      | `.rs`                               | Yes                  |
-| Java      | `.java`                             | Yes                  |
-| C / C++   | `.c`, `.h`, `.cpp`, `.hpp`, …      | Yes                  |
+- Reading entire files when they only need one function
+- Making 4–8 tool calls to find context that should take 1
+- Consuming thousands of tokens on exploration before writing a single line of code
+- Missing relationships between symbols that are not co-located in the same file
 
-The parser also recognizes **Bash**, **JSON**, **HTML**, and **CSS** by extension, but only languages with a registered extractor are fully indexed into the graph. Language detection is **extension-based** via `parser.LanguageForFile()` in `internal/parser/utils.go`.
+On a large repository, this makes AI assistance slow, expensive, and imprecise. The root cause is that every existing tool treats a codebase as **text** — a flat collection of files to search through.
 
-## Architecture
+**Mearch treats a codebase as a graph.**
+
+---
+
+## How It Works
 
 ```
-Scanner → Parser (Tree-sitter) → Extractor (per-language IR)
-    → Graph builder → Retrieval engine (BM25 + graph traversal)
-        → MCP tools
+Source Code
+    ↓
+Scanner          discovers eligible files across the repo
+    ↓
+Parser           produces syntax trees via Tree-sitter (11 languages)
+    ↓
+IR Extractor     converts syntax trees into language-agnostic semantic IR
+    ↓
+Graph Builder    builds a directed graph of nodes and edges
+    ↓
+Retrieval Engine ranks relevant context using BM25 + graph traversal + PageRank
+    ↓
+MCP Server       exposes everything to AI agents via the Model Context Protocol
 ```
 
-| Package            | Role |
-|--------------------|------|
-| `internal/scanner` | Discover source files; respect ignore rules and depth limits |
-| `internal/parser`  | Parse files; map extensions → `Language` |
-| `internal/extractor` | Language-specific IR from syntax trees |
-| `internal/ir`      | Shared IR types (files, functions, imports, calls) |
-| `internal/graph`   | In-memory directed code graph |
-| `internal/retrieval` | Index-time scoring + query-time pipeline |
-| `internal/mcp`     | MCP server, tools, auto-index |
-| `cmd/mearch`       | Server entrypoint |
+When an AI agent needs context for a task, it calls `query_context("scanner ignore rules")` and receives the most relevant symbols, functions, and files — compressed to fit a token budget — in a single round trip.
 
-## Requirements
+---
 
-- **Go 1.25+** (see `go.mod`)
-- An MCP client (e.g. Cursor) for normal use
+## Key Features
 
-## Quick start
+### Graph-Native Retrieval
 
-### 1. Build
+Every symbol in the codebase becomes a node. Every relationship — imports, calls, defines, implements — becomes an edge. Retrieval follows these edges bidirectionally, surfacing not just the queried symbol but everything that calls it and everything it depends on.
+
+### Multi-Strategy Seed Detection
+
+Five strategies run in parallel to find the best starting nodes for any query:
+
+- **BM25 name search**: exact and stemmed matches against symbol names
+- **BM25 comment search**: matches against docstrings and comments
+- **BM25 expanded search**: matches after query expansion via co-occurrence and synonyms
+- **Fuzzy matching**: Levenshtein edit distance for typos and near-matches
+- **Structural intent**: detects query patterns like "find callers of X" and adjusts traversal direction accordingly
+
+### Field-Weighted BM25
+
+Documents are not just symbol names. Each symbol's BM25 document contains:
+
+```
+name          weight 3.0   symbol name tokens
+qualified     weight 2.5   full qualified name
+comment       weight 2.0   docstrings and comments
+callers       weight 1.5   who calls this symbol
+callees       weight 1.5   what this symbol calls
+siblings      weight 1.2   other methods on same receiver
+filepath      weight 1.0   file path segments
+imports       weight 0.5   imported packages
+```
+
+This means a query for `"directory traversal"` finds `Scanner.Scan` through its comment even though neither word appears in the function name.
+
+### Query Expansion
+
+Before searching, queries are expanded using:
+
+- **Co-occurrence matrix**: terms that always appear near query terms in this specific codebase
+- **Programming synonym table**: hand-curated synonyms for common code vocabulary (`"scan"` → `"walk"`, `"traverse"`, `"discover"`)
+- **Graph neighbor injection**: tokens from graph-adjacent nodes are injected into the query
+
+### PageRank Centrality
+
+PageRank is computed across the entire graph at index time. Load-bearing symbols that everything depends on score higher. External stdlib packages are discounted by 90% — they have high raw centrality but are irrelevant for code navigation.
+
+### Bidirectional Weighted BFS
+
+Traversal from seed nodes follows both directions:
+
+- **Forward**: what does this symbol depend on?
+- **Backward**: who uses this symbol? ← often the most valuable direction
+
+Edges are weighted by semantic tightness (`define=0.90`, `call=0.80`, `import=0.45`). A priority queue ensures high-weight paths fill the candidate budget before low-weight ones.
+
+### Tiered Token Compression
+
+Results are compressed to a configurable token budget in three tiers:
+
+1. **Always include**: seed nodes, direct callers, exact name matches
+2. **Fill to 60% budget**: score ≥ 0.50, exported symbols, depth ≤ 2
+3. **Fill to 90% budget**: score ≥ 0.30, depth ≤ 3
+
+Files with 4+ relevant symbols are collapsed into a single file-level entry, saving significant tokens while telling the agent exactly which file to read.
+
+### Local-First, Zero Infrastructure
+
+- No hosted services
+- No cloud dependencies
+- No remote indexing pipelines
+- No API keys required
+- Runs entirely on developer machines or CI
+
+---
+
+## Supported Languages
+
+| Language   | Extension(s)                          | Parser                 |
+| ---------- | ------------------------------------- | ---------------------- |
+| Go         | `.go`                                 | tree-sitter-go         |
+| TypeScript | `.ts`, `.mts`                         | tree-sitter-typescript |
+| TSX        | `.tsx`                                | tree-sitter-typescript |
+| JavaScript | `.js`, `.mjs`, `.cjs`                 | tree-sitter-javascript |
+| JSX        | `.jsx`                                | tree-sitter-javascript |
+| Python     | `.py`, `.pyw`                         | tree-sitter-python     |
+| Rust       | `.rs`                                 | tree-sitter-rust       |
+| Java       | `.java`                               | tree-sitter-java       |
+| Ruby       | `.rb`                                 | tree-sitter-ruby       |
+| C          | `.c`, `.h`                            | tree-sitter-c          |
+| C++        | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | tree-sitter-cpp        |
+
+---
+
+## Installation
+
+### Prerequisites
+
+- Go 1.25+
+- Git
+
+### Build from source
 
 ```bash
-go build -o mearch ./cmd/mearch
+git clone https://github.com/Mohammad-y-abbass/mearch
+cd mearch
+go build ./cmd/mearch
 ```
 
-On Windows the binary is typically `mearch.exe`.
+## MCP Server
 
-### 2. Configure MCP (Cursor example)
+Mearch exposes its retrieval engine via the Model Context Protocol so any MCP-compatible AI agent can use it.
 
-Add to your MCP settings (e.g. `.cursor/mcp.json` or global MCP config):
+### How the graph is built
+
+When the MCP server starts, it does not immediately index anything. Indexing is triggered automatically when an IDE session begins — specifically, when the MCP client sends its first initialization message. At that point, `index_project` is called automatically on the workspace root, building the full semantic graph before any queries arrive. This means the graph is always ready by the time the agent needs context.
+
+If you want to explicitly re-index (after major code changes), call `index_project` manually.
+
+### Configuration
+
+Add Mearch to your MCP client configuration:
+
+**Claude Desktop** (`claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
     "mearch": {
-      "command": "C:\\path\\to\\mearch.exe",
-      "args": []
+      "command": "/path/to/mearch",
+      "args": ["serve"],
+      "env": {
+        "MEARCH_ROOT": "/path/to/your/project"
+      }
     }
   }
 }
 ```
 
-Use the absolute path to your built binary. On macOS/Linux:
+**Cursor** (`.cursor/mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "mearch": {
-      "command": "/usr/local/bin/mearch",
-      "args": []
+      "command": "/path/to/mearch",
+      "args": ["serve"]
     }
   }
 }
 ```
 
-Or run without installing:
+**Windsurf** (`~/.codeium/windsurf/mcp_config.json`):
 
 ```json
 {
   "mcpServers": {
     "mearch": {
-      "command": "go",
-      "args": ["run", "./cmd/mearch"],
-      "cwd": "C:\\Users\\You\\Desktop\\mearch"
+      "command": "/path/to/mearch",
+      "args": ["serve"]
     }
   }
 }
 ```
 
-Restart the MCP client after changing config. Mearch logs to **stderr**; MCP uses **stdio** for the protocol.
+### Available MCP Tools
 
-### 3. Optional: force project path
+#### `index_project`
 
-If auto-index cannot resolve the workspace root, set:
+Scans and indexes a project directory. Called automatically on IDE load.
+
+```
+Arguments:
+  path        string   Absolute or relative path to the project root
+  max_depth   int      Maximum directory depth to scan (default: 10)
+```
+
+#### `query_context`
+
+Retrieves the most relevant code context for a natural language query. This is the primary tool — use it before making any code changes.
+
+```
+Arguments:
+  query        string   Natural language description of what you're looking for
+  token_budget int      Maximum tokens to return (default: 4000)
+  debug        bool     Include scoring details for each result
+
+Returns:
+  Ranked list of relevant symbols with file locations, scores, and relationships
+```
+
+Example queries:
+
+```
+"scanner ignore rules"
+"how does the parser handle errors"
+"find the graph traversal logic"
+"authentication and session management"
+"database connection pooling"
+```
+
+#### `find_symbol`
+
+Finds a specific symbol by name with partial matching.
+
+```
+Arguments:
+  name     string   Symbol name (partial match supported)
+  kind     string   Filter by: function method struct interface const var file package
+  package  string   Filter by package name
+```
+
+#### `find_callers`
+
+Finds all code that calls a specific function or method. Use this before changing a function signature.
+
+```
+Arguments:
+  symbol   string   Fully or partially qualified symbol name
+```
+
+#### `trace_deps`
+
+Traces the dependency chain of a symbol up to a specified depth.
+
+```
+Arguments:
+  symbol   string   Symbol to trace
+  depth    int      How many hops to follow (default: 2, max: 5)
+```
+
+#### `graph_stats`
+
+Returns statistics about the indexed project graph. Useful for verifying the index is complete.
+
+---
+
+## CLI
 
 ```bash
-export MEARCH_PROJECT_PATH=/absolute/path/to/your/project
+# Start MCP server (primary usage)
+mearch serve
+
+# Index a project and print stats
+mearch index ./myproject
+
+# Query context from the command line
+mearch query "scanner ignore rules"
+
+# Query with custom token budget
+mearch query "authentication flow" --tokens 2000
+
+# Show graph statistics
+mearch stats ./myproject
+
+# Watch a project for changes and keep index live
+mearch watch ./myproject
 ```
 
-(Windows: `set MEARCH_PROJECT_PATH=...`)
+---
 
-## MCP tools
+## Project Structure
 
-### `index_project`
+---
 
-Scans and indexes a directory. Also runs automatically when the client connects (unless the same root is already indexed).
+## Architecture Deep Dive
 
-| Argument     | Description |
-|-------------|-------------|
-| `path`      | Project root (required) |
-| `max_depth` | Max directory depth (default `10`; `0` is treated as `10`) |
+### Why graph-native retrieval
 
-### `query_context`
-
-Primary retrieval tool: natural-language query → ranked symbols and files within the token budget.
-
-| Argument       | Description |
-|----------------|-------------|
-| `query`        | Natural language question (required) |
-| `token_budget` | Max output tokens (default `4000`) |
-| `debug`        | Include scoring details |
-
-Example queries: `"scanner ignore rules"`, `"how does the parser handle errors"`, `"graph traversal logic"`.
-
-### `find_symbol`
-
-Look up symbols by name (partial match). Optional filters: `kind`, `package`.
-
-### `find_callers`
-
-List callers of a function or method (e.g. `"Scanner.Scan"`).
-
-### `trace_deps`
-
-Follow outgoing dependencies from a symbol (default depth `2`, max `5`).
-
-### `graph_stats`
-
-Node/edge counts and breakdown by node kind for the current index.
-
-## Development
-
-### Run tests
-
-```bash
-go test ./...
-```
-
-### Run the server locally
-
-```bash
-go run ./cmd/mearch
-```
-
-The process expects an MCP client on stdio; running alone will appear idle until a client connects.
-
-### Project layout
+The central insight of Mearch is that codebases are graphs, not text blobs. Consider this query:
 
 ```
-cmd/
-  mearch/          # MCP server main
-internal/
-  mcp/             # MCP server & tools
-  scanner/         # File discovery
-  parser/          # Tree-sitter parsing
-  extractor/       # Per-language IR
-  ir/              # Intermediate representation
-  graph/           # Code graph
-  retrieval/       # BM25 + graph retrieval
+"fix login button loading state"
 ```
 
-## How retrieval works (summary)
+A naive system searches for files containing "login", "button", "loading". It finds `LoginButton.tsx` directly.
 
-At **index time**, Mearch builds enriched documents, a BM25 index, a co-occurrence matrix, and graph-based scores (PageRank, betweenness, caller counts).
+Mearch does more. It finds `LoginButton.tsx` as a seed, then traverses the graph:
 
-At **query time**, the pipeline:
+```
+LoginButton.tsx                           ← seed (depth 0)
+    ↑ called by: App.tsx                  ← backward depth 1
+    ↓ calls: useAuth hook                 ← forward depth 1
+    ↓ calls: useLoadingState hook         ← forward depth 1
+    ↓ imports: Button component           ← forward depth 1
+        ↓ imports: styles/button.css      ← forward depth 2
+```
 
-1. Preprocesses and expands the query (synonyms / co-occurrence / graph neighbors)
-2. Detects **seed** nodes (BM25, comments, fuzzy match, intent hints)
-3. Traverses the graph bidirectionally from seeds
-4. Fuses lexical and graph scores
-5. Compresses results to fit the token budget (including “read whole file” hints for high-relevance files)
+The agent gets `LoginButton.tsx`, `useAuth.ts`, `useLoadingState.ts`, `Button.tsx`, and `button.css` — exactly what it needs to fix the loading state — in one call, without exploring the filesystem.
 
-See `internal/retrieval/retrieval.go` for the full pipeline.
+### Why no AI models
 
-## Adding a language
+Mearch achieves near-semantic retrieval quality without any machine learning models:
 
-1. Add a `Language` constant in `internal/parser/languages.go`.
-2. Map extensions in `internal/parser/utils.go` (`languageForExt`).
-3. Register the Tree-sitter grammar in `internal/parser/parser.go` (`treeSitterLanguage`).
-4. Add the extension to `internal/scanner/extensions.go` for discovery.
-5. Implement an extractor in `internal/extractor/` and register it in `internal/extractor/extractor.go`.
+- **Query expansion** from the codebase's own co-occurrence patterns acts as a learned vocabulary
+- **Field-weighted BM25** on enriched documents (including comments and callers) closes the vocabulary gap
+- **Graph traversal** surfaces structurally related symbols that text search cannot find
+- **PageRank centrality** identifies load-bearing symbols without any training
 
-Parser and scanner extension lists should stay in sync.
+This means Mearch runs identically on a MacBook Pro M3 and a cheap CI server. No GPU, no model downloads, no inference latency.
 
-## Troubleshooting
+---
+### What is measured
 
-| Issue | What to check |
-|-------|----------------|
-| `project not indexed` | Wait for auto-index after connect, or call `index_project` with an absolute path |
-| Many files skipped | Language may parse but lack an extractor, or extension is unsupported |
-| Empty `query_context` results | Try a more specific query; run `graph_stats` to confirm the index size |
-| Wrong project indexed | Set `MEARCH_PROJECT_PATH` or call `index_project` with the correct `path` |
-| MCP not starting | Verify binary path in config; check stderr logs from the MCP process |
+| Metric                 | Description                                                   |
+| ---------------------- | ------------------------------------------------------------- |
+| **Baseline tokens**    | Tokens in edited files read in full (minimum any agent needs) |
+| **Mearch tokens**      | Tokens returned by `query_context`                            |
+| **Token savings %**    | `(baseline - mearch) / baseline × 100`                        |
+| **Round trip savings** | Agent tool calls before: 4–8. With Mearch: 1                  |
+| **File recall**        | Did Mearch return the files the agent needed?                 |
+| **Symbol recall**      | Did Mearch return the symbols the agent edited?               |
+
+---
+
+## Adding a New Language
+
+Mearch is designed so that adding a language requires minimal changes:
+
+**1. Add the extension to `scanner.go`:**
+
+```go
+var supportedExtensions = map[string]string{
+    ".kt": "kotlin",  // ← add this
+}
+```
+
+**2. Add the language constant and grammar to `parser.go`:**
+
+```go
+const (
+    LanguageKotlin Language = iota + 12  // ← add constant
+)
+
+var languageForExt = map[string]Language{
+    ".kt": LanguageKotlin,  // ← add mapping
+}
+
+// In treeSitterLanguage():
+case LanguageKotlin:
+    return tree_sitter.NewLanguage(tree_sitter_kotlin.Language()), nil
+```
+
+**3. Create `extractor_kotlin.go`:**
+
+```go
+type KotlinExtractor struct { tsLang *tree_sitter.Language }
+func NewKotlinExtractor() *KotlinExtractor { ... }
+func (e *KotlinExtractor) Extract(result *parser.ParseResult) (*ir.FileIR, error) { ... }
+```
+
+**4. Register in `extractor.go`:**
+
+```go
+r.extractors[parser.LanguageKotlin] = NewKotlinExtractor()
+```
+
+Everything else — graph builder, retrieval engine, MCP server, benchmarks — works immediately with no changes.
+
+---
+
+## Future Goals
+
+The following features are planned for future releases, in priority order:
+
+#### File Watcher
+
+Use `fsnotify` to watch for filesystem changes and update the graph incrementally as files are edited. The graph stays live without manual re-indexing.
+
+## Contributing
+
+### Code style
+
+- Go standard formatting (`gofmt`)
+- Comments on every exported symbol
+- Every design decision has a comment explaining why, not just what
+
+### Filing issues
+
+Please include:
+
+- The query that produced unexpected results
+- The repo and file structure (anonymized if needed)
+- The actual vs expected results from `query_context` with `debug: true`
+
+---
 
 ## License
 
-See repository license file if present; otherwise check with the maintainer.
+MIT License — see LICENSE file.
+
+---
+
+## Philosophy
+
+Mearch is not:
+
+- An LLM wrapper
+- A vector database
+- A chatbot framework
+- A generic AI SDK
+
+Mearch is a graph-native code intelligence engine.
+
+Its goal is to transform codebases from raw text into structured semantic systems for efficient AI-assisted development.
+
+The long-term vision is not merely better retrieval. It is structural understanding of software systems — which becomes increasingly critical as repositories grow larger, AI agents become more autonomous, token efficiency becomes essential, and software systems become more interconnected.
+
+> _Codebases are graphs, not text blobs._
