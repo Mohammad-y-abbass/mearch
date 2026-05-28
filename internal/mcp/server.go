@@ -33,10 +33,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mohamamd-y-abbass/mearch/internal/extractor"
@@ -45,6 +47,7 @@ import (
 	"github.com/mohamamd-y-abbass/mearch/internal/parser"
 	"github.com/mohamamd-y-abbass/mearch/internal/retrieval"
 	"github.com/mohamamd-y-abbass/mearch/internal/scanner"
+	"github.com/mohamamd-y-abbass/mearch/internal/watcher"
 )
 
 // mearchServer holds the server state.
@@ -56,6 +59,9 @@ type mearchServer struct {
 	engine  *retrieval.Engine
 	g       *graph.Graph
 	rootDir string
+
+	watcher       *watcher.Watcher
+	watcherCancel context.CancelFunc
 }
 
 func newMearchServer() *mearchServer {
@@ -69,6 +75,8 @@ func New() *mearchServer {
 // Run creates the MCP server, registers all tools, and starts serving on stdio.
 func (s *mearchServer) Run() error {
 	fmt.Fprintln(os.Stderr, "MCP SERVER STARTING...")
+	defer s.stopWatcher()
+	s.bootstrapIndexAndWatcher()
 
 	// Create MCP server.
 	mcpServer := sdk.NewServer(&sdk.Implementation{
@@ -98,6 +106,35 @@ func (s *mearchServer) Run() error {
 		ctx,
 		&sdk.StdioTransport{},
 	)
+}
+
+// bootstrapIndexAndWatcher performs best-effort startup indexing so the watcher
+// is active for the entire MCP server lifetime, not only after the first tool call.
+func (s *mearchServer) bootstrapIndexAndWatcher() {
+	bootstrapCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	path, err := s.resolveProjectPath(bootstrapCtx, nil)
+	if err != nil {
+		log.Printf("mearch: bootstrap index skipped: %v", err)
+		return
+	}
+	if path == "" {
+		log.Printf("mearch: bootstrap index skipped: no project path")
+		return
+	}
+
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+
+	if _, err := s.indexProjectLocked(bootstrapCtx, indexProjectArgs{Path: path, MaxDepth: 10}); err != nil {
+		log.Printf("mearch: bootstrap index failed for %s: %v", path, err)
+		return
+	}
+	log.Printf("mearch: bootstrap index complete for %s", path)
+}
+
+type HeyItsMe struct {
 }
 
 // =========================================================
@@ -212,6 +249,10 @@ func (s *mearchServer) indexProjectLocked(ctx context.Context, args indexProject
 	s.rootDir = sc.RootDir()
 	s.mu.Unlock()
 
+	if err := s.startWatcher(sc.RootDir(), g, fileIRs, engine); err != nil {
+		return "", err
+	}
+
 	// --- Build response ---
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("✓ Project indexed: %s\n\n", sc.RootDir()))
@@ -253,6 +294,59 @@ func (s *mearchServer) indexProjectLocked(ctx context.Context, args indexProject
 	sb.WriteString("\nReady for queries. Call query_context, find_symbol, find_callers, or trace_deps.")
 
 	return sb.String(), nil
+}
+
+func (s *mearchServer) startWatcher(root string, g *graph.Graph, fileIRs []*ir.FileIR, engine *retrieval.Engine) error {
+	// Ensure only one watcher is active at a time.
+	s.stopWatcher()
+
+	var w *watcher.Watcher
+	w, err := watcher.New(watcher.WatcherConfig{
+		RootDir:       root,
+		DebounceDelay: 300 * time.Millisecond,
+		Logger:        log.Default(),
+		OnUpdate: func(result watcher.UpdateResult) {
+			if result.Error != nil {
+				log.Printf("mearch: watcher update failed for %s: %v", result.Path, result.Error)
+				return
+			}
+
+			s.mu.Lock()
+			s.engine = w.Engine()
+			s.g = w.Graph()
+			s.mu.Unlock()
+		},
+	}, g, fileIRs, engine)
+	if err != nil {
+		return fmt.Errorf("watcher init failed: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go w.Run(ctx)
+
+	s.mu.Lock()
+	s.watcher = w
+	s.watcherCancel = cancel
+	s.mu.Unlock()
+
+	log.Printf("mearch: watcher started for %s", root)
+	return nil
+}
+
+func (s *mearchServer) stopWatcher() {
+	s.mu.Lock()
+	w := s.watcher
+	cancel := s.watcherCancel
+	s.watcher = nil
+	s.watcherCancel = nil
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if w != nil {
+		w.Close()
+	}
 }
 
 // =========================================================

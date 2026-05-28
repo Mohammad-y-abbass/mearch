@@ -104,6 +104,39 @@ func (g *Graph) AddEdge(e Edge) {
 	g.in[e.To] = append(g.in[e.To], e)
 }
 
+// RemoveNode removes a node and all connected edges from the graph.
+// Safe to call for unknown IDs (no-op).
+func (g *Graph) RemoveNode(id string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if _, ok := g.nodes[id]; !ok {
+		return
+	}
+
+	for _, edge := range g.out[id] {
+		g.in[edge.To] = removeEdgesReferencingNode(g.in[edge.To], id)
+	}
+	delete(g.out, id)
+
+	for _, edge := range g.in[id] {
+		g.out[edge.From] = removeEdgesReferencingNode(g.out[edge.From], id)
+	}
+	delete(g.in, id)
+
+	delete(g.nodes, id)
+}
+
+func removeEdgesReferencingNode(edges []Edge, nodeID string) []Edge {
+	filtered := edges[:0]
+	for _, e := range edges {
+		if e.From != nodeID && e.To != nodeID {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
+
 // Node returns the node with the given ID, or nil if not found.
 func (g *Graph) Node(id string) *Node {
 	g.mu.RLock()
